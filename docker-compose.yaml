@@ -1,0 +1,81 @@
+# https://github.com/compose-spec/compose-spec/blob/master/spec.md#extension
+x-environment: &default-environment
+  VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5-20251001}
+  LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1024}
+  EMBED_MODEL: ${EMBED_MODEL:-voyage-4-lite}
+  EMBED_DIM: ${EMBED_DIM:-1024}
+  PYTHONUNBUFFERED: "1"
+
+# Overrides DB_URL from .env so local dev never hits Supabase by accident.
+x-local-db: &local-db
+  DB_URL: postgresql://postgres:postgres@agent-rag-postgres:5432/agent_rag
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-rag-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agent_rag
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-rag-net
+
+  api:
+    image: agent-rag
+    build:
+      target: final
+    container_name: agent-rag-api
+    command: uvicorn src.presentation.api.main:api --host 0.0.0.0 --port 8080 --reload
+    environment:
+      <<: [*default-environment, *local-db]
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/code
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agent-rag-net
+
+  migrate:
+    image: agent-rag-tests
+    build:
+      target: tests
+    container_name: agent-rag-migrate
+    command: sh -c "alembic upgrade head && python -m ingest.v2.init_table"
+    environment:
+      <<: [*default-environment, *local-db]
+    volumes:
+      - .:/code
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agent-rag-net
+
+  unit-tests:
+    image: agent-rag-tests
+    build:
+      target: tests
+    container_name: agent-rag-unit-tests
+    command: pytest tests/unit -v
+    environment:
+      <<: *default-environment
+    volumes:
+      - .:/code
+    networks:
+      - agent-rag-net
+
+networks:
+  agent-rag-net:

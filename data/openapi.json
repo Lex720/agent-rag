@@ -1,0 +1,1573 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "HR Platform Integration API",
+    "version": "2.0.0",
+    "description": "API for external integrations with the HR platform. Covers employees, contracts, departments, payroll, time-off, documents, webhooks, SSO, and API key management."
+  },
+  "paths": {
+    "/auth/token": {
+      "post": {
+        "operationId": "auth_token_create",
+        "summary": "Request OAuth2 access token",
+        "description": "Issues an access token using the OAuth2 client_credentials grant. Send client_id and client_secret in the request body. Tokens expire after 3600 seconds. All API endpoints require a valid Bearer token in the Authorization header. When a token expires the integration must request a new one — there is no refresh token in this flow. Proactively renew the token 60 seconds before expiry to avoid 401 errors. Each client_id has associated scopes; accessing a resource outside the granted scopes returns 403, not 401.",
+        "tags": ["Authentication"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant_type": { "type": "string" },
+                  "client_id": { "type": "string" },
+                  "client_secret": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Access token issued with expires_in field" },
+          "401": { "description": "Invalid client credentials" }
+        }
+      }
+    },
+    "/auth/token/revoke": {
+      "post": {
+        "operationId": "auth_token_revoke",
+        "summary": "Revoke access token",
+        "description": "Immediately invalidates an active access token. Useful when rotating credentials or decommissioning an integration. Any request using the revoked token will receive 401.",
+        "tags": ["Authentication"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Token revoked" },
+          "401": { "description": "Token not found or already revoked" }
+        }
+      }
+    },
+    "/v1/employees": {
+      "get": {
+        "operationId": "employees_list_v1",
+        "summary": "List employees (v1, offset pagination)",
+        "description": "Returns a paginated list of employees using offset-based pagination via page and page_size. Deprecated in favour of /v2/employees. Supports filtering by department_id, status (ACTIVE, PENDING, TERMINATED), and hire_date range.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "page", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "page_size", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "department_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "hire_date_from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "hire_date_to", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated list of employees" },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "post": {
+        "operationId": "employees_create",
+        "summary": "Create employee",
+        "description": "Creates a new employee record in PENDING status. Transitions to ACTIVE after HR approval. The rut field is the Chilean national ID and must be unique. The contract_type field accepts INDEFINITE, FIXED_TERM, or PART_TIME.",
+        "tags": ["Employees"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rut": { "type": "string" },
+                  "first_name": { "type": "string" },
+                  "last_name": { "type": "string" },
+                  "email": { "type": "string" },
+                  "department_id": { "type": "string" },
+                  "position_id": { "type": "string" },
+                  "contract_type": { "type": "string" },
+                  "hire_date": { "type": "string" },
+                  "base_salary": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Employee created in PENDING status" },
+          "400": { "description": "Validation error" },
+          "409": { "description": "RUT already exists" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}": {
+      "get": {
+        "operationId": "employees_retrieve",
+        "summary": "Get employee by ID",
+        "description": "Returns the full profile of a single employee including personal data, contract, department, position, and current status. Sensitive fields like base_salary are omitted unless the integration has the payroll:read scope.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Employee object" },
+          "404": { "description": "Employee not found" }
+        }
+      },
+      "put": {
+        "operationId": "employees_update",
+        "summary": "Update employee",
+        "description": "Updates mutable fields of an employee. Immutable fields (rut, hire_date) are silently ignored. Partial updates supported — omitted fields retain current value.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string" },
+                  "department_id": { "type": "string" },
+                  "position_id": { "type": "string" },
+                  "phone": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Employee updated" },
+          "404": { "description": "Employee not found" }
+        }
+      },
+      "delete": {
+        "operationId": "employees_terminate",
+        "summary": "Terminate employee",
+        "description": "Initiates termination for an employee. Transitions to TERMINATED after termination_date. Requires termination_reason. Payroll cycles including this employee remain accessible after termination.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "termination_date": { "type": "string" },
+                  "termination_reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Termination initiated" },
+          "404": { "description": "Employee not found" }
+        }
+      }
+    },
+    "/v2/employees": {
+      "get": {
+        "operationId": "employees_list_v2",
+        "summary": "List employees (v2, cursor pagination)",
+        "description": "Returns employees using cursor-based pagination. Pass next_cursor from the previous response. Returns up to 100 records per page. Use updated_after to sync only employees modified since a given timestamp. Replaces /v1/employees for new integrations.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "next_cursor", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "updated_after", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Cursor-paginated list of employees with next_cursor field" },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/activate": {
+      "post": {
+        "operationId": "employees_activate",
+        "summary": "Activate employee",
+        "description": "Transitions an employee from PENDING to ACTIVE status. This operation triggers an employee.created webhook event to all subscribers. Cannot be applied to already ACTIVE or TERMINATED employees.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Employee activated" },
+          "409": { "description": "Employee is not in PENDING status" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/documents": {
+      "get": {
+        "operationId": "employee_documents_list",
+        "summary": "List employee documents",
+        "description": "Returns all documents attached to an employee, including contracts, ID copies, certificates, and payslips. Documents are returned as metadata with a signed download URL valid for 15 minutes.",
+        "tags": ["Documents"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "type", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of documents with signed URLs" },
+          "404": { "description": "Employee not found" }
+        }
+      },
+      "post": {
+        "operationId": "employee_documents_upload",
+        "summary": "Upload employee document",
+        "description": "Attaches a document to an employee. Supported types: CONTRACT, ID_COPY, CERTIFICATE, OTHER. Files must be PDF or image. Maximum size 10MB. The response includes the document ID for future reference.",
+        "tags": ["Documents"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string" },
+                  "type": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Document uploaded and attached" },
+          "413": { "description": "File exceeds 10MB limit" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/documents/{document_id}": {
+      "delete": {
+        "operationId": "employee_documents_delete",
+        "summary": "Delete employee document",
+        "description": "Permanently deletes a document attached to an employee. This operation cannot be undone. Documents of type CONTRACT cannot be deleted if the employee has an active contract.",
+        "tags": ["Documents"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "document_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Document deleted" },
+          "409": { "description": "Cannot delete active contract document" }
+        }
+      }
+    },
+    "/v1/departments": {
+      "get": {
+        "operationId": "departments_list",
+        "summary": "List departments",
+        "description": "Returns all departments in the organization including their parent department (for hierarchical structures), cost center, and headcount.",
+        "tags": ["Departments"],
+        "parameters": [
+          { "name": "parent_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of departments" }
+        }
+      },
+      "post": {
+        "operationId": "departments_create",
+        "summary": "Create department",
+        "description": "Creates a new department. Optionally assign a parent_id to create a sub-department. The cost_center field is used for payroll reporting.",
+        "tags": ["Departments"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "code": { "type": "string" },
+                  "parent_id": { "type": "string" },
+                  "cost_center": { "type": "string" },
+                  "manager_employee_id": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Department created" },
+          "409": { "description": "Department code already exists" }
+        }
+      }
+    },
+    "/v1/departments/{department_id}": {
+      "get": {
+        "operationId": "departments_retrieve",
+        "summary": "Get department",
+        "description": "Returns a single department including its full hierarchy path, list of positions, manager, and current headcount.",
+        "tags": ["Departments"],
+        "parameters": [
+          { "name": "department_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Department object" },
+          "404": { "description": "Department not found" }
+        }
+      },
+      "put": {
+        "operationId": "departments_update",
+        "summary": "Update department",
+        "description": "Updates a department's mutable fields. Changing parent_id moves the department in the hierarchy. Moving a department does not affect the employees assigned to it.",
+        "tags": ["Departments"],
+        "parameters": [
+          { "name": "department_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "cost_center": { "type": "string" },
+                  "manager_employee_id": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Department updated" },
+          "404": { "description": "Department not found" }
+        }
+      },
+      "delete": {
+        "operationId": "departments_delete",
+        "summary": "Delete department",
+        "description": "Deletes a department. Fails if the department has active employees or sub-departments. Reassign employees to another department before deleting.",
+        "tags": ["Departments"],
+        "parameters": [
+          { "name": "department_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Department deleted" },
+          "409": { "description": "Department has active employees or sub-departments" }
+        }
+      }
+    },
+    "/v1/positions": {
+      "get": {
+        "operationId": "positions_list",
+        "summary": "List positions",
+        "description": "Returns all job positions (cargos) defined in the organization. Positions are templates that define the job title, salary band, and required skills for a role.",
+        "tags": ["Positions"],
+        "parameters": [
+          { "name": "department_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of positions" }
+        }
+      },
+      "post": {
+        "operationId": "positions_create",
+        "summary": "Create position",
+        "description": "Creates a new job position. salary_band_min and salary_band_max define the compensation range for the role and are used in payroll validation.",
+        "tags": ["Positions"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": { "type": "string" },
+                  "department_id": { "type": "string" },
+                  "salary_band_min": { "type": "number" },
+                  "salary_band_max": { "type": "number" },
+                  "is_manager": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Position created" }
+        }
+      }
+    },
+    "/v1/positions/{position_id}": {
+      "get": {
+        "operationId": "positions_retrieve",
+        "summary": "Get position",
+        "description": "Returns a single job position including salary band, assigned department, and list of employees currently holding this position.",
+        "tags": ["Positions"],
+        "parameters": [
+          { "name": "position_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Position object" },
+          "404": { "description": "Position not found" }
+        }
+      },
+      "put": {
+        "operationId": "positions_update",
+        "summary": "Update position",
+        "description": "Updates a job position. Updating salary_band_min or salary_band_max does not retroactively change existing employee salaries.",
+        "tags": ["Positions"],
+        "parameters": [
+          { "name": "position_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": { "type": "string" },
+                  "salary_band_min": { "type": "number" },
+                  "salary_band_max": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Position updated" }
+        }
+      }
+    },
+    "/v1/contracts": {
+      "get": {
+        "operationId": "contracts_list",
+        "summary": "List contracts",
+        "description": "Returns all employment contracts. Each contract belongs to an employee and defines the contractual relationship including type, salary, and term. An employee can have only one ACTIVE contract at a time.",
+        "tags": ["Contracts"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "type", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of contracts" }
+        }
+      },
+      "post": {
+        "operationId": "contracts_create",
+        "summary": "Create contract",
+        "description": "Creates a new employment contract for an employee. type must be INDEFINITE, FIXED_TERM, or PART_TIME. For FIXED_TERM contracts, end_date is required. Creating a new contract for an employee with an ACTIVE contract will set the previous one to SUPERSEDED.",
+        "tags": ["Contracts"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "employee_id": { "type": "string" },
+                  "type": { "type": "string" },
+                  "start_date": { "type": "string" },
+                  "end_date": { "type": "string" },
+                  "base_salary": { "type": "number" },
+                  "currency": { "type": "string" },
+                  "weekly_hours": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Contract created" },
+          "409": { "description": "Employee already has an active contract" }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}": {
+      "get": {
+        "operationId": "contracts_retrieve",
+        "summary": "Get contract",
+        "description": "Returns a single contract including salary history and amendment log.",
+        "tags": ["Contracts"],
+        "parameters": [
+          { "name": "contract_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Contract object" },
+          "404": { "description": "Contract not found" }
+        }
+      },
+      "put": {
+        "operationId": "contracts_update",
+        "summary": "Amend contract",
+        "description": "Amends an active contract. Salary changes are effective from effective_date. Each amendment is recorded in the contract's amendment_log for audit purposes.",
+        "tags": ["Contracts"],
+        "parameters": [
+          { "name": "contract_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "base_salary": { "type": "number" },
+                  "effective_date": { "type": "string" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Contract amended" },
+          "409": { "description": "Contract is not active" }
+        }
+      }
+    },
+    "/v1/payroll/cycles": {
+      "get": {
+        "operationId": "payroll_cycles_list",
+        "summary": "List payroll cycles",
+        "description": "Returns all payroll cycles for the company. Each cycle represents a monthly payroll run with states OPEN, PROCESSING, CLOSED, or PAID. Settlement data is only available for CLOSED and PAID cycles.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "year", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "month", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of payroll cycles" }
+        }
+      }
+    },
+    "/v1/payroll/cycles/{cycle_id}": {
+      "get": {
+        "operationId": "payroll_cycles_retrieve",
+        "summary": "Get payroll cycle",
+        "description": "Returns full details of a payroll cycle including gross totals, net totals, employer contributions, and cycle metadata. Check cycle status before requesting settlements.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "cycle_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Payroll cycle object" },
+          "404": { "description": "Cycle not found" }
+        }
+      }
+    },
+    "/v1/payroll/cycles/{cycle_id}/settlements": {
+      "get": {
+        "operationId": "payroll_settlements_list",
+        "summary": "List settlements for a payroll cycle",
+        "description": "Returns the individual settlement (liquidacion) for each employee in the cycle. Only available when cycle status is CLOSED or PAID. Each settlement includes gross_salary, deductions, net_salary, AFP contributions, and health contributions.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "cycle_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of settlements" },
+          "409": { "description": "Cycle is not CLOSED or PAID" }
+        }
+      }
+    },
+    "/v1/payroll/cycles/{cycle_id}/settlements/{settlement_id}": {
+      "get": {
+        "operationId": "payroll_settlement_retrieve",
+        "summary": "Get single settlement",
+        "description": "Returns the full settlement detail for one employee in a cycle, including gross_salary, each deduction line item, net_salary, AFP institution, AFP contribution amount, health institution, health contribution amount, and any one-time bonuses or deductions.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "cycle_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "settlement_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Settlement detail object" },
+          "404": { "description": "Settlement not found" }
+        }
+      }
+    },
+    "/v1/payroll/cycles/{cycle_id}/settlements/{settlement_id}/pdf": {
+      "get": {
+        "operationId": "payroll_settlement_pdf",
+        "summary": "Download settlement PDF",
+        "description": "Returns a signed URL to download the settlement PDF (liquidacion de sueldo) for one employee. The URL expires after 15 minutes. Requires payroll:read scope.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "cycle_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "settlement_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Signed URL to PDF valid for 15 minutes" },
+          "403": { "description": "Insufficient scope" }
+        }
+      }
+    },
+    "/v1/payroll/variables": {
+      "get": {
+        "operationId": "payroll_variables_list",
+        "summary": "List payroll variables",
+        "description": "Returns variable compensation items (bonuses, commissions, overtime) pending for the next cycle. Variables can be created by integrations and are included in the next OPEN cycle.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "cycle_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of payroll variables" }
+        }
+      },
+      "post": {
+        "operationId": "payroll_variables_create",
+        "summary": "Submit payroll variable",
+        "description": "Submits a variable compensation item for inclusion in the next payroll cycle. type must be BONUS, COMMISSION, OVERTIME, or DEDUCTION. amount must be positive for BONUS/COMMISSION/OVERTIME and will be treated as a deduction if type is DEDUCTION.",
+        "tags": ["Payroll"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "employee_id": { "type": "string" },
+                  "type": { "type": "string" },
+                  "amount": { "type": "number" },
+                  "description": { "type": "string" },
+                  "reference_id": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Variable submitted for next cycle" },
+          "409": { "description": "Current cycle is not OPEN" }
+        }
+      }
+    },
+    "/v1/payroll/variables/{variable_id}": {
+      "delete": {
+        "operationId": "payroll_variables_delete",
+        "summary": "Cancel payroll variable",
+        "description": "Cancels a pending payroll variable before it is included in a cycle. Only variables in PENDING status can be cancelled. Once a cycle moves to PROCESSING the variables are locked.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "variable_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Variable cancelled" },
+          "409": { "description": "Variable is already locked in a cycle" }
+        }
+      }
+    },
+    "/v1/time-off/requests": {
+      "get": {
+        "operationId": "time_off_requests_list",
+        "summary": "List time-off requests",
+        "description": "Returns time-off requests (vacaciones, licencias, permisos). Filter by employee, status (PENDING, APPROVED, REJECTED), or date range. Includes the reason, requested days, and approver.",
+        "tags": ["Time Off"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of time-off requests" }
+        }
+      },
+      "post": {
+        "operationId": "time_off_requests_create",
+        "summary": "Create time-off request",
+        "description": "Submits a time-off request on behalf of an employee. type can be VACATION, SICK_LEAVE, PERSONAL_LEAVE, or MATERNITY_PATERNITY. Requests are created in PENDING status and must be approved by a manager.",
+        "tags": ["Time Off"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "employee_id": { "type": "string" },
+                  "type": { "type": "string" },
+                  "start_date": { "type": "string" },
+                  "end_date": { "type": "string" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Time-off request created in PENDING status" },
+          "409": { "description": "Overlapping approved request exists" }
+        }
+      }
+    },
+    "/v1/time-off/requests/{request_id}": {
+      "get": {
+        "operationId": "time_off_requests_retrieve",
+        "summary": "Get time-off request",
+        "description": "Returns a single time-off request including approval history and the number of working days consumed.",
+        "tags": ["Time Off"],
+        "parameters": [
+          { "name": "request_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Time-off request object" },
+          "404": { "description": "Request not found" }
+        }
+      },
+      "delete": {
+        "operationId": "time_off_requests_cancel",
+        "summary": "Cancel time-off request",
+        "description": "Cancels a PENDING or APPROVED time-off request. Cancelling an APPROVED request in the past returns the consumed days to the employee's balance.",
+        "tags": ["Time Off"],
+        "parameters": [
+          { "name": "request_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Request cancelled" },
+          "409": { "description": "Request is already REJECTED or in the past" }
+        }
+      }
+    },
+    "/v1/time-off/balances": {
+      "get": {
+        "operationId": "time_off_balances_list",
+        "summary": "Get time-off balances",
+        "description": "Returns the current vacation and leave balance for one or more employees. Balance is expressed in working days. Includes accrued, used, and remaining days broken down by leave type.",
+        "tags": ["Time Off"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of employee time-off balances" }
+        }
+      }
+    },
+    "/v1/reports/headcount": {
+      "get": {
+        "operationId": "reports_headcount",
+        "summary": "Headcount report",
+        "description": "Returns a headcount summary grouped by department, position, or contract type. Includes active, pending, and terminated employees as of the reference date.",
+        "tags": ["Reports"],
+        "parameters": [
+          { "name": "as_of", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "group_by", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Headcount breakdown" }
+        }
+      }
+    },
+    "/v1/reports/payroll-summary": {
+      "get": {
+        "operationId": "reports_payroll_summary",
+        "summary": "Payroll summary report",
+        "description": "Returns aggregated payroll data for a given cycle or date range. Includes total gross, total net, total employer cost, AFP contributions, and health contributions grouped by department or cost center.",
+        "tags": ["Reports"],
+        "parameters": [
+          { "name": "cycle_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "group_by", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Payroll summary" }
+        }
+      }
+    },
+    "/v1/reports/turnover": {
+      "get": {
+        "operationId": "reports_turnover",
+        "summary": "Turnover report",
+        "description": "Returns employee turnover metrics for a given period: hires, terminations, and turnover rate. Breakdowns available by department and termination reason.",
+        "tags": ["Reports"],
+        "parameters": [
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "department_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Turnover metrics" }
+        }
+      }
+    },
+    "/v1/reports/export": {
+      "post": {
+        "operationId": "reports_export",
+        "summary": "Export report",
+        "description": "Triggers an async export of a report. Supported report types: EMPLOYEES, PAYROLL, CONTRACTS, TIME_OFF. Supported formats: CSV, XLSX. The response includes a job_id. Poll /v1/reports/export/{job_id} to check status and get the download URL.",
+        "tags": ["Reports"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "report_type": { "type": "string" },
+                  "format": { "type": "string" },
+                  "filters": { "type": "object" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Export job created — poll job_id for status" }
+        }
+      }
+    },
+    "/v1/reports/export/{job_id}": {
+      "get": {
+        "operationId": "reports_export_status",
+        "summary": "Get export job status",
+        "description": "Returns the status of an export job. status can be PENDING, PROCESSING, COMPLETED, or FAILED. When COMPLETED, the response includes a signed download URL valid for 60 minutes.",
+        "tags": ["Reports"],
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Export job status with download URL when completed" },
+          "404": { "description": "Job not found" }
+        }
+      }
+    },
+    "/v1/webhooks": {
+      "get": {
+        "operationId": "webhooks_list",
+        "summary": "List registered webhooks",
+        "description": "Returns all webhook subscriptions for the integration including target URL, subscribed events, active status, and last delivery result.",
+        "tags": ["Webhooks"],
+        "responses": {
+          "200": { "description": "List of webhook subscriptions" }
+        }
+      },
+      "post": {
+        "operationId": "webhooks_create",
+        "summary": "Register webhook",
+        "description": "Registers a new webhook subscription. Available events: employee.created, employee.updated, employee.terminated, contract.created, contract.amended, payroll.cycle.closed, payroll.cycle.paid, time_off.approved, time_off.rejected. The secret is used to compute an HMAC-SHA256 signature sent in the X-Signature header on each delivery.",
+        "tags": ["Webhooks"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": { "type": "string" },
+                  "events": { "type": "array", "items": { "type": "string" } },
+                  "secret": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Webhook registered" },
+          "400": { "description": "Invalid URL or unknown event type" }
+        }
+      }
+    },
+    "/v1/webhooks/{webhook_id}": {
+      "get": {
+        "operationId": "webhooks_retrieve",
+        "summary": "Get webhook",
+        "description": "Returns a single webhook subscription including delivery history for the last 100 events with HTTP status codes and response times.",
+        "tags": ["Webhooks"],
+        "parameters": [
+          { "name": "webhook_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Webhook subscription with delivery history" },
+          "404": { "description": "Webhook not found" }
+        }
+      },
+      "put": {
+        "operationId": "webhooks_update",
+        "summary": "Update webhook",
+        "description": "Updates a webhook subscription. You can change the URL, event list, active status, or rotate the secret. Rotating the secret takes effect immediately on the next delivery.",
+        "tags": ["Webhooks"],
+        "parameters": [
+          { "name": "webhook_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": { "type": "string" },
+                  "events": { "type": "array", "items": { "type": "string" } },
+                  "active": { "type": "boolean" },
+                  "secret": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Webhook updated" }
+        }
+      },
+      "delete": {
+        "operationId": "webhooks_delete",
+        "summary": "Delete webhook",
+        "description": "Removes a webhook subscription. Deliveries stop immediately. In-flight deliveries already queued may still arrive within 60 seconds.",
+        "tags": ["Webhooks"],
+        "parameters": [
+          { "name": "webhook_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Webhook deleted" },
+          "404": { "description": "Webhook not found" }
+        }
+      }
+    },
+    "/v1/webhooks/{webhook_id}/test": {
+      "post": {
+        "operationId": "webhooks_test",
+        "summary": "Send test webhook delivery",
+        "description": "Sends a synthetic test payload to the webhook URL to verify connectivity and signature validation. The delivery is marked as TEST in the delivery history.",
+        "tags": ["Webhooks"],
+        "parameters": [
+          { "name": "webhook_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Test delivery sent — check delivery history for result" }
+        }
+      }
+    },
+    "/v1/api-keys": {
+      "get": {
+        "operationId": "api_keys_list",
+        "summary": "List API keys",
+        "description": "Returns all API keys for the integration. The full key value is never returned after creation — only the key ID, name, prefix, and expiry are shown.",
+        "tags": ["API Keys"],
+        "responses": {
+          "200": { "description": "List of API keys" }
+        }
+      },
+      "post": {
+        "operationId": "api_keys_create",
+        "summary": "Create API key",
+        "description": "Creates a new API key. The full key value is returned only once in this response — store it securely. API keys have narrower scope than OAuth2 tokens and should only be used for low-risk sandbox endpoints such as webhook test triggers.",
+        "tags": ["API Keys"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "expires_at": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "API key created — full value returned only here" }
+        }
+      }
+    },
+    "/v1/api-keys/{key_id}": {
+      "delete": {
+        "operationId": "api_keys_delete",
+        "summary": "Revoke API key",
+        "description": "Permanently revokes an API key. Any subsequent request using this key receives a 401 immediately. For key rotation, create the new key before revoking the old one.",
+        "tags": ["API Keys"],
+        "parameters": [
+          { "name": "key_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Key revoked" },
+          "404": { "description": "Key not found" }
+        }
+      }
+    },
+    "/v1/sso/saml/configure": {
+      "post": {
+        "operationId": "sso_saml_configure",
+        "summary": "Configure SAML SSO",
+        "description": "Uploads the SAML 2.0 identity provider metadata to configure SSO for the organization. Supported providers: Okta, Azure AD, Google Workspace, and any SAML 2.0 compliant IdP. Users authenticate via SSO and are auto-provisioned on first login if auto_provision is true.",
+        "tags": ["SSO"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metadata_url": { "type": "string" },
+                  "entity_id": { "type": "string" },
+                  "auto_provision": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "SAML configuration saved" },
+          "400": { "description": "Invalid metadata or unreachable metadata URL" }
+        }
+      }
+    },
+    "/v1/sso/saml/status": {
+      "get": {
+        "operationId": "sso_saml_status",
+        "summary": "Get SAML SSO status",
+        "description": "Returns the current SAML configuration including IdP entity ID, ACS URL, last successful SSO login, and whether auto-provisioning is enabled.",
+        "tags": ["SSO"],
+        "responses": {
+          "200": { "description": "SAML configuration status" },
+          "404": { "description": "SSO not configured for this organization" }
+        }
+      }
+    },
+    "/v1/sso/saml/disable": {
+      "post": {
+        "operationId": "sso_saml_disable",
+        "summary": "Disable SAML SSO",
+        "description": "Disables SAML SSO for the organization. Users will fall back to password authentication. All active SSO sessions are invalidated immediately.",
+        "tags": ["SSO"],
+        "responses": {
+          "200": { "description": "SSO disabled — sessions invalidated" },
+          "404": { "description": "SSO not configured" }
+        }
+      }
+    },
+    "/v1/roles": {
+      "get": {
+        "operationId": "roles_list",
+        "summary": "List integration roles",
+        "description": "Returns all roles available for assignment to integrations. Each role defines a set of scopes. Roles cannot be created via API — they are managed by the platform administrator.",
+        "tags": ["Roles & Permissions"],
+        "responses": {
+          "200": { "description": "List of roles with their scopes" }
+        }
+      }
+    },
+    "/v1/roles/{role_id}/scopes": {
+      "get": {
+        "operationId": "roles_scopes_list",
+        "summary": "List scopes for a role",
+        "description": "Returns all scopes granted by a specific role. Scopes follow the pattern resource:action (e.g. employees:read, payroll:write). An integration must have the required scope to call a protected endpoint, otherwise it receives 403.",
+        "tags": ["Roles & Permissions"],
+        "parameters": [
+          { "name": "role_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of scopes" },
+          "404": { "description": "Role not found" }
+        }
+      }
+    },
+    "/v1/audit-log": {
+      "get": {
+        "operationId": "audit_log_list",
+        "summary": "List audit log entries",
+        "description": "Returns audit log entries for actions performed via the API. Each entry includes the timestamp, actor (integration client_id), resource type, resource ID, action, and IP address. Useful for compliance and debugging.",
+        "tags": ["Audit"],
+        "parameters": [
+          { "name": "resource_type", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "resource_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "next_cursor", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Cursor-paginated audit log entries" }
+        }
+      }
+    },
+    "/v1/rate-limit/status": {
+      "get": {
+        "operationId": "rate_limit_status",
+        "summary": "Get current rate limit status",
+        "description": "Returns the current rate limit counters for the authenticated integration: requests used, requests remaining, and reset timestamp for each limit window (per-second, per-minute, per-hour). Useful for implementing adaptive backoff.",
+        "tags": ["Rate Limiting"],
+        "responses": {
+          "200": { "description": "Rate limit counters and reset timestamps" }
+        }
+      }
+    },
+    "/v1/cost-centers": {
+      "get": {
+        "operationId": "cost_centers_list",
+        "summary": "List cost centers",
+        "description": "Returns all cost centers defined in the organization. Cost centers are used to group payroll expenditure for accounting and reporting purposes. Each department can be linked to a cost center.",
+        "tags": ["Cost Centers"],
+        "responses": {
+          "200": { "description": "List of cost centers" }
+        }
+      },
+      "post": {
+        "operationId": "cost_centers_create",
+        "summary": "Create cost center",
+        "description": "Creates a new cost center. The code must be unique and is used as the GL account identifier in payroll exports.",
+        "tags": ["Cost Centers"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "code": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Cost center created" },
+          "409": { "description": "Code already exists" }
+        }
+      }
+    },
+    "/v1/cost-centers/{cost_center_id}": {
+      "get": {
+        "operationId": "cost_centers_retrieve",
+        "summary": "Get cost center",
+        "description": "Returns a single cost center including the list of departments linked to it and the total headcount and payroll cost for the current open cycle.",
+        "tags": ["Cost Centers"],
+        "parameters": [
+          { "name": "cost_center_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Cost center object" },
+          "404": { "description": "Cost center not found" }
+        }
+      },
+      "put": {
+        "operationId": "cost_centers_update",
+        "summary": "Update cost center",
+        "description": "Updates a cost center name or description. The code cannot be changed after creation.",
+        "tags": ["Cost Centers"],
+        "parameters": [
+          { "name": "cost_center_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Cost center updated" }
+        }
+      },
+      "delete": {
+        "operationId": "cost_centers_delete",
+        "summary": "Delete cost center",
+        "description": "Deletes a cost center. Fails if any department is currently linked to it.",
+        "tags": ["Cost Centers"],
+        "parameters": [
+          { "name": "cost_center_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Cost center deleted" },
+          "409": { "description": "Cost center has linked departments" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/bank-accounts": {
+      "get": {
+        "operationId": "employee_bank_accounts_list",
+        "summary": "List employee bank accounts",
+        "description": "Returns the bank accounts registered for payroll deposit for an employee. Multiple accounts are supported. The primary account receives the net salary transfer each cycle.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of bank accounts" },
+          "404": { "description": "Employee not found" }
+        }
+      },
+      "post": {
+        "operationId": "employee_bank_accounts_create",
+        "summary": "Add employee bank account",
+        "description": "Adds a bank account for payroll deposit. bank must be a valid Chilean bank code (e.g. BCI, SANTANDER, BICE, ESTADO). account_type can be CHECKING or SAVINGS.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "bank": { "type": "string" },
+                  "account_number": { "type": "string" },
+                  "account_type": { "type": "string" },
+                  "is_primary": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Bank account added" },
+          "409": { "description": "Account number already registered" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/bank-accounts/{account_id}": {
+      "delete": {
+        "operationId": "employee_bank_accounts_delete",
+        "summary": "Remove employee bank account",
+        "description": "Removes a bank account from an employee. Cannot remove the primary account if it is the only account. Assign another account as primary first.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "account_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Bank account removed" },
+          "409": { "description": "Cannot remove the only primary account" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/emergency-contacts": {
+      "get": {
+        "operationId": "emergency_contacts_list",
+        "summary": "List emergency contacts",
+        "description": "Returns the emergency contacts registered for an employee. Used for HR compliance and occupational safety records.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of emergency contacts" }
+        }
+      },
+      "post": {
+        "operationId": "emergency_contacts_create",
+        "summary": "Add emergency contact",
+        "description": "Adds an emergency contact for an employee. relationship describes the contact's relation to the employee (e.g. SPOUSE, PARENT, SIBLING).",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "phone": { "type": "string" },
+                  "relationship": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Emergency contact added" }
+        }
+      }
+    },
+    "/v1/employees/{employee_id}/transfers": {
+      "post": {
+        "operationId": "employees_transfer",
+        "summary": "Transfer employee to another department",
+        "description": "Transfers an employee to a new department and/or position effective on transfer_date. The previous department and position are recorded in the employee's history. If the new position has a different salary band, a contract amendment is required separately.",
+        "tags": ["Employees"],
+        "parameters": [
+          { "name": "employee_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "department_id": { "type": "string" },
+                  "position_id": { "type": "string" },
+                  "transfer_date": { "type": "string" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Employee transferred" },
+          "409": { "description": "transfer_date is in the past" }
+        }
+      }
+    },
+    "/v1/attendance/records": {
+      "get": {
+        "operationId": "attendance_records_list",
+        "summary": "List attendance records",
+        "description": "Returns clock-in and clock-out records for one or more employees. Used for overtime calculation and integration with time-tracking systems. Records include the source (MANUAL, BIOMETRIC, MOBILE_APP).",
+        "tags": ["Attendance"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of attendance records" }
+        }
+      },
+      "post": {
+        "operationId": "attendance_records_create",
+        "summary": "Submit attendance record",
+        "description": "Submits a clock-in or clock-out event for an employee. type must be CLOCK_IN or CLOCK_OUT. The timestamp must not be more than 7 days in the past. Duplicate CLOCK_IN without an intervening CLOCK_OUT is rejected.",
+        "tags": ["Attendance"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "employee_id": { "type": "string" },
+                  "type": { "type": "string" },
+                  "timestamp": { "type": "string" },
+                  "source": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Attendance record created" },
+          "409": { "description": "Duplicate event or timestamp out of range" }
+        }
+      }
+    },
+    "/v1/attendance/records/{record_id}": {
+      "delete": {
+        "operationId": "attendance_records_delete",
+        "summary": "Delete attendance record",
+        "description": "Deletes a single attendance record. Only records with source MANUAL can be deleted via API. BIOMETRIC and MOBILE_APP records can only be deleted by an HR administrator.",
+        "tags": ["Attendance"],
+        "parameters": [
+          { "name": "record_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Record deleted" },
+          "403": { "description": "Cannot delete non-MANUAL records via API" }
+        }
+      }
+    },
+    "/v1/attendance/summary": {
+      "get": {
+        "operationId": "attendance_summary",
+        "summary": "Get attendance summary",
+        "description": "Returns an aggregated attendance summary per employee for a period, including total hours worked, overtime hours, and days absent. Used as input for payroll overtime calculations.",
+        "tags": ["Attendance"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Attendance summary per employee" }
+        }
+      }
+    },
+    "/v1/notifications/subscriptions": {
+      "get": {
+        "operationId": "notification_subscriptions_list",
+        "summary": "List notification subscriptions",
+        "description": "Returns all active notification subscriptions for the integration. Unlike webhooks, notifications are delivered via email or Slack and do not require a public HTTPS endpoint.",
+        "tags": ["Notifications"],
+        "responses": {
+          "200": { "description": "List of notification subscriptions" }
+        }
+      },
+      "post": {
+        "operationId": "notification_subscriptions_create",
+        "summary": "Subscribe to notifications",
+        "description": "Creates a notification subscription for specific events. delivery_channel must be EMAIL or SLACK. For SLACK, provide the webhook_url. Available events mirror the webhook event list.",
+        "tags": ["Notifications"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "events": { "type": "array", "items": { "type": "string" } },
+                  "delivery_channel": { "type": "string" },
+                  "destination": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Notification subscription created" }
+        }
+      }
+    },
+    "/v1/notifications/subscriptions/{subscription_id}": {
+      "delete": {
+        "operationId": "notification_subscriptions_delete",
+        "summary": "Unsubscribe from notifications",
+        "description": "Removes a notification subscription. The integration stops receiving notifications for the subscribed events on this channel.",
+        "tags": ["Notifications"],
+        "parameters": [
+          { "name": "subscription_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Subscription removed" }
+        }
+      }
+    },
+    "/v1/payroll/corrections": {
+      "get": {
+        "operationId": "payroll_corrections_list",
+        "summary": "List payroll corrections",
+        "description": "Returns payroll corrections (reliquidaciones) applied to past cycles. A correction adjusts a previously PAID settlement, for example to include a retroactive salary increase or fix a calculation error.",
+        "tags": ["Payroll"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "cycle_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of payroll corrections" }
+        }
+      },
+      "post": {
+        "operationId": "payroll_corrections_create",
+        "summary": "Submit payroll correction",
+        "description": "Submits a payroll correction (reliquidacion) for a previously PAID cycle. The correction is included in the next OPEN cycle as a retroactive adjustment. Requires payroll:write scope. The mandatory reason field is recorded in the audit log.",
+        "tags": ["Payroll"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "employee_id": { "type": "string" },
+                  "original_cycle_id": { "type": "string" },
+                  "adjustment_amount": { "type": "number" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Correction submitted" },
+          "409": { "description": "Original cycle is not in PAID status" }
+        }
+      }
+    },
+    "/v1/org-chart": {
+      "get": {
+        "operationId": "org_chart_retrieve",
+        "summary": "Get org chart",
+        "description": "Returns the full organizational hierarchy as a tree structure. Each node includes department ID, name, manager employee ID, headcount, and list of child department IDs. Useful for rendering org charts in external tools.",
+        "tags": ["Departments"],
+        "responses": {
+          "200": { "description": "Org chart tree" }
+        }
+      }
+    },
+    "/v1/org-chart/employees": {
+      "get": {
+        "operationId": "org_chart_employees",
+        "summary": "Get employee reporting structure",
+        "description": "Returns the reporting structure for one or more employees: direct manager, direct reports, and peers within the same department. Useful for building org views in external tools.",
+        "tags": ["Departments"],
+        "parameters": [
+          { "name": "employee_id", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Employee reporting structure" }
+        }
+      }
+    },
+    "/v1/integration/health": {
+      "get": {
+        "operationId": "integration_health",
+        "summary": "Check integration health",
+        "description": "Returns a health status for the integration: authentication validity, remaining quota, any suspended scopes, and whether any configured webhooks have been auto-disabled due to repeated delivery failures.",
+        "tags": ["Integration"],
+        "responses": {
+          "200": { "description": "Integration health status" }
+        }
+      }
+    },
+    "/v1/integration/settings": {
+      "get": {
+        "operationId": "integration_settings_retrieve",
+        "summary": "Get integration settings",
+        "description": "Returns the current configuration of the integration: display name, logo URL, allowed redirect URIs, assigned role, and enabled scopes.",
+        "tags": ["Integration"],
+        "responses": {
+          "200": { "description": "Integration settings" }
+        }
+      },
+      "put": {
+        "operationId": "integration_settings_update",
+        "summary": "Update integration settings",
+        "description": "Updates integration display metadata such as name, logo URL, and allowed redirect URIs. Scope and role changes must be requested through the marketplace portal.",
+        "tags": ["Integration"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "display_name": { "type": "string" },
+                  "logo_url": { "type": "string" },
+                  "redirect_uris": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Settings updated" }
+        }
+      }
+    }
+  }
+}

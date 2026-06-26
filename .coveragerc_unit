@@ -1,0 +1,10 @@
+[run]
+data_file = .coverage_unit
+omit =
+    *main.py
+    *setting*
+    tests/*
+
+[report]
+fail_under = 80
+show_missing = true
